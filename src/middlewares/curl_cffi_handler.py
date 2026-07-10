@@ -6,7 +6,6 @@ import random
 import time as time_module
 
 from curl_cffi import requests as curl_requests
-from scrapy import signals
 from scrapy.http import HtmlResponse
 from scrapy.settings import Settings
 from twisted.internet import threads
@@ -40,14 +39,12 @@ class CurlCffiDownloadHandler:
 
     @classmethod
     def from_crawler(cls, crawler):
-        handler = cls(crawler.settings)
-        crawler.signals.connect(handler._close, signal=signals.spider_closed)
-        return handler
+        return cls(crawler.settings)
 
     def download_request(self, request, spider):
         return threads.deferToThread(self._do_request, request, spider)
 
-    def _close(self):
+    async def close(self):
         if self.session:
             self.session.close()
 

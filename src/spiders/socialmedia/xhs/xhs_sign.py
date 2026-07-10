@@ -38,10 +38,10 @@ def _patch_xhshow_a3_hash():
 
     _original_build = CryptoProcessor.build_payload_array
 
-    def _patched_build(self, hex_parameter, a1_value, app_identifier="xhs-pc-web",
+    def _patched_build(self, hex_parameter, hex_md5_path, a1_value, app_identifier="xhs-pc-web",
                        string_param="", timestamp=None, sign_state=None):
-        payload = _original_build(self, hex_parameter, a1_value, app_identifier,
-                                  string_param, timestamp, sign_state)
+        payload = _original_build(self, hex_parameter, hex_md5_path, a1_value,
+                                  app_identifier, string_param, timestamp, sign_state)
         if "{" not in string_param:
             correct_md5_hex = hashlib.md5(string_param.encode("utf-8")).hexdigest()
             correct_md5_bytes = [int(correct_md5_hex[i:i + 2], 16) for i in range(0, 32, 2)]

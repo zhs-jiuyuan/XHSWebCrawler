@@ -8,8 +8,9 @@ import os
 import scrapy
 from scrapy.exceptions import CloseSpider
 
-from src.spiders.base import BaseSpider
+from src.spiders.socialmedia import SocialMediaSpider
 from .xhs_sign import sign_with_xhshow, generate_x_b3_traceid, generate_xray_traceid
+from . import xhs_config as config
 from src.items.base import BaseItem
 
 _LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
@@ -17,14 +18,8 @@ os.makedirs(_LOG_DIR, exist_ok=True)
 _LOG_FILE = os.path.join(_LOG_DIR, "scrapy.log")
 
 
-class XiaohongshuSpider(BaseSpider):
+class XiaohongshuSpider(SocialMediaSpider):
     name = "xiaohongshu"
-
-    allowed_domains = [
-        "xiaohongshu.com",
-        "www.xiaohongshu.com",
-        "edith.xiaohongshu.com",
-    ]
 
     custom_settings = {
         "LOG_FILE": _LOG_FILE,
@@ -32,29 +27,18 @@ class XiaohongshuSpider(BaseSpider):
         "CONCURRENT_REQUESTS": 3,
         "CONCURRENT_REQUESTS_PER_DOMAIN": 3,
         "DOWNLOAD_TIMEOUT": 30,
-        "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
         "DOWNLOAD_HANDLERS": {
             "https": "src.middlewares.curl_cffi_handler.CurlCffiDownloadHandler",
-        },
-        "DEFAULT_REQUEST_HEADERS": {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Cache-Control": "no-cache",
-            "Origin": "https://www.xiaohongshu.com",
-            "Referer": "https://www.xiaohongshu.com/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         },
     }
 
     BASE_URL = "https://edith.xiaohongshu.com"
 
-    def __init__(self, keyword: str = None, num: int = 100, *args, **kwargs):
+    def __init__(self, keyword: str = None, num: int = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        if not keyword:
-            raise ValueError("keyword is required, use: -a keyword='xxx'")
-        self.keyword = keyword
-        self.num_limit = int(num)
+        self.keyword = keyword or config.KEYWORD
+        self.num_limit = int(num) if num is not None else config.MAX_NOTES_COUNT
         self.items_count = 0
         self._seen_urls = set()
 
@@ -110,8 +94,8 @@ class XiaohongshuSpider(BaseSpider):
             "x-xray-traceid": generate_xray_traceid(),
         }
 
-    def start_requests(self):
-        yield self._make_search_request(page=1)
+    async def start(self):
+        yield self._make_search_request(page=config.START_PAGE)
 
     def _make_search_request(self, page: int = 1):
         api = "/api/sns/web/v1/search/notes"
@@ -120,8 +104,8 @@ class XiaohongshuSpider(BaseSpider):
             "page": page,
             "page_size": 20,
             "search_id": generate_x_b3_traceid(21),
-            "sort": "general",
-            "note_type": 0,
+            "sort": config.SORT_TYPE,
+            "note_type": config.NOTE_TYPE,
             "ext_flags": [],
             "filters": [
                 {"tags": ["general"], "type": "sort_type"},
@@ -192,7 +176,7 @@ class XiaohongshuSpider(BaseSpider):
         )
 
         for note in notes:
-            if self.items_count >= self.num_limit:
+            if len(self._seen_urls) >= self.num_limit:
                 self.logger.info(
                     "[XHS] Reached num_limit=%d at page=%d, stop yielding",
                     self.num_limit, page,
@@ -212,7 +196,7 @@ class XiaohongshuSpider(BaseSpider):
                 xsec_token=note.get("xsec_token", ""),
             )
 
-        if has_more and self.items_count < self.num_limit:
+        if has_more and len(self._seen_urls) < self.num_limit:
             yield self._make_search_request(page=page + 1)
 
     def parse_note_detail(self, response):
