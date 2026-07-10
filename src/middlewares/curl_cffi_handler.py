@@ -31,11 +31,6 @@ class CurlCffiDownloadHandler:
                 "Cache-Control": "no-cache",
             }
         )
-        self.force_http11 = settings.getbool("CURL_CFFI_HTTP11", False)
-
-    @classmethod
-    def from_settings(cls, settings: Settings):
-        return cls(settings)
 
     @classmethod
     def from_crawler(cls, crawler):
@@ -65,7 +60,6 @@ class CurlCffiDownloadHandler:
             data=body,
             cookies=cookies,
             impersonate=alias,
-            http_version=1 if self.force_http11 else 2,
         )
         if proxy:
             req_kwargs["proxies"] = {"http": proxy, "https": proxy}

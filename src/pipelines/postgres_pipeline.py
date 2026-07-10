@@ -5,13 +5,10 @@
 pipeline 仅做透传存储；字段类型不匹配时记录错误。
 """
 import json
-import logging
 from datetime import datetime, timezone
 
 import psycopg2
 from itemadapter import ItemAdapter
-
-logger = logging.getLogger(__name__)
 
 _INSERT_SQL = """
 INSERT INTO public.social_media

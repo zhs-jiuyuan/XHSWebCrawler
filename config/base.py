@@ -189,7 +189,6 @@ try:
 
     globals().update(scrapy_settings)
 
-    YAML_CONFIG = config
 except Exception as e:
     traceback.print_exc()
     print(f"Error loading YAML config: {e}, fallback to default settings.")

@@ -234,7 +234,6 @@ class XiaohongshuSpider(SocialMediaSpider):
 
         if has_more and self._scheduled.get(keyword, 0) < remaining:
             yield self._make_search_request(keyword, page=page + 1, remaining=remaining)
-            yield self._make_search_request(keyword, page=page + 1)
 
     def parse_note_detail(self, response):
         note_id = response.meta["note_id"]
