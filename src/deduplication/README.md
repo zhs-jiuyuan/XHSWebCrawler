@@ -135,14 +135,32 @@ helper_other = RedisDedupHelper(REDIS_URL, "weibo")
 └─ spider 正常结束
 ```
 
-## 增量采集（预留）
+## 警告：`is_keyword_done` 与 `register_keyword` 调用顺序
 
-当前未实现，但 Key 结构已预留扩展点。未来增加 `incre_num` 时：
+`register_keyword` 会**无条件覆盖** `done=0`。
 
 ```python
-# 增加目标条数
-helper._r.hincrby(f"{prefix}:kw:{keyword}", "target", incre_num)
-# 重置完成标志
-helper._r.hset(f"{prefix}:kw:{keyword}", "done", "0")
-# 重新运行 spider
+# 正确顺序（必须先判 done，再 register）
+if helper.is_keyword_done(kw):   # done=1 → 跳过，不会覆盖
+    skip
+helper.register_keyword(kw, N)   # 仅在 done≠1 时执行
+
+# 错误顺序（先 register 会把 done=1 重置为 done=0，导致已完成的关键词被重新爬取）
+helper.register_keyword(kw, N)   # ← 覆盖 done=0！
+if helper.is_keyword_done(kw):   # 永远 False
+    skip
+```
+
+> **任何人在修改 `start()` 或 `_incr_start()` 时，必须保持 `is_keyword_done` 在 `register_keyword` 之前调用。**
+
+---
+
+## 增量采集
+
+详见 `src/spiders/socialmedia/xhs/incremental-design.md`。
+
+核心设计：全量和增量**共享** notes SET 去重，keyword 追踪按 mode 分 prefix（`{xhs}:incr:kw:*`）。以**轮**为单位推进，必须全部 keyword done 才能推进下一轮。调用方式：
+
+```bash
+scrapy crawl xiaohongshu -a mode=incremental -a incre_num=5
 ```
