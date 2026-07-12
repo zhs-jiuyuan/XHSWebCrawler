@@ -9,22 +9,29 @@ class RedisDedupHelper:
 
     Keys::
 
-        {spider}:notes              SET    "url|data_type"
-        {spider}:kw:{keyword}       HASH   {target, done}
-        {spider}:kw:{keyword}:cnt   STRING int
+        {spider}:notes              SET    "url|data_type"           (shared)
+        {spider}:kw:{keyword}       HASH   {target, done}            (full)
+        {spider}:kw:{keyword}:cnt   STRING int                       (full)
+        {spider}:incr:kw:{keyword}  HASH   {target, done}            (incr)
+        {spider}:incr:kw:{keyword}:cnt STRING int                    (incr)
     """
 
-    def __init__(self, redis_url: str, spider_name: str):
+    def __init__(self, redis_url: str, spider_name: str, mode: str = "full"):
         self._r = redis.Redis.from_url(redis_url, decode_responses=True)
         self._prefix = spider_name
+        self._mode = mode
 
     def _notes_key(self) -> str:
         return f"{self._prefix}:notes"
 
     def _kw_key(self, keyword: str) -> str:
+        if self._mode == "incremental":
+            return f"{self._prefix}:incr:kw:{keyword}"
         return f"{self._prefix}:kw:{keyword}"
 
     def _cnt_key(self, keyword: str) -> str:
+        if self._mode == "incremental":
+            return f"{self._prefix}:incr:kw:{keyword}:cnt"
         return f"{self._prefix}:kw:{keyword}:cnt"
 
     # ---- keyword management -------------------------------------------
@@ -54,3 +61,15 @@ class RedisDedupHelper:
 
     def incr(self, keyword: str) -> int:
         return int(self._r.incr(self._cnt_key(keyword)))
+
+    def advance_round(self, keyword: str, incre: int) -> None:
+        self._r.hincrby(self._kw_key(keyword), "target", incre)
+        self._r.hset(self._kw_key(keyword), "done", "0")
+
+    def get_target(self, keyword: str) -> int:
+        val = self._r.hget(self._kw_key(keyword), "target")
+        return int(val) if val is not None else 0
+
+    def keyword_has_full_record(self, keyword: str) -> bool:
+        full_key = f"{self._prefix}:kw:{keyword}"
+        return bool(self._r.exists(full_key))

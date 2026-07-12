@@ -38,7 +38,8 @@ class XiaohongshuSpider(SocialMediaSpider):
 
     BASE_URL = "https://edith.xiaohongshu.com"
 
-    def __init__(self, keyword: str = None, num: int = None, *args, **kwargs):
+    def __init__(self, keyword: str = None, num: int = None,
+                 mode: str = None, incre_num: int = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         if keyword:
@@ -48,16 +49,27 @@ class XiaohongshuSpider(SocialMediaSpider):
         else:
             self.keywords = [config.KEYWORD]
 
-        self.num_limit = int(num) if num is not None else config.MAX_NOTES_COUNT
+        if mode == "incremental" and incre_num:
+            self.num_limit = int(incre_num)
+            self.mode = "incremental"
+        else:
+            self.num_limit = int(num) if num is not None else config.MAX_NOTES_COUNT
+            self.mode = None
+
         self.cookies_dict, self.cookies_str = self._load_cookie()
         self._scheduled = {}
 
-        self.logger.info("[XHS] keywords=%s num=%d", self.keywords, self.num_limit)
+        self.logger.info("[XHS] keywords=%s num=%d mode=%s",
+                         self.keywords, self.num_limit, self.mode or "full")
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super().from_crawler(crawler, *args, **kwargs)
-        spider.helper = RedisDedupHelper(crawler.settings.get("REDIS_URL"), spider.name)
+        spider.helper = RedisDedupHelper(
+            crawler.settings.get("REDIS_URL"),
+            spider.name,
+            mode=spider.mode or "full",
+        )
         return spider
 
     def _load_cookie(self):
@@ -109,6 +121,11 @@ class XiaohongshuSpider(SocialMediaSpider):
         }
 
     async def start(self):
+        if self.mode == "incremental":
+            for request in self._incr_start():
+                yield request
+            return
+
         for keyword in self.keywords:
             if self.helper.is_keyword_done(keyword):
                 self.logger.info("[XHS] keyword=%s already done, skip", keyword)
@@ -123,6 +140,50 @@ class XiaohongshuSpider(SocialMediaSpider):
             self.logger.info("[XHS] keyword=%s collected=%d remaining=%d, start crawling",
                              keyword, collected, remaining)
             yield self._make_search_request(keyword, page=config.START_PAGE, remaining=remaining)
+
+    def _incr_start(self):
+        h = self.helper
+        keywords = self.keywords
+
+        new_kws = [k for k in keywords if not h.keyword_has_full_record(k)]
+        if new_kws:
+            self.logger.warning(
+                "[XHS:incr] new keyword(s) detected without full-crawl record: %s. "
+                "Run full crawl first for these keywords, then enable incremental mode.",
+                new_kws,
+            )
+            raise CloseSpider("New keywords without full-crawl record detected")
+
+        all_exist = all(h._r.exists(h._kw_key(k)) for k in keywords)
+        all_done = all(h.is_keyword_done(k) for k in keywords)
+
+        if not all_exist:
+            self.logger.info("[XHS:incr] first round — init all keywords")
+            for k in keywords:
+                h.register_keyword(k, self.num_limit)
+        elif all_done:
+            self.logger.info("[XHS:incr] all keywords done — advancing to next round")
+            for k in keywords:
+                h.advance_round(k, self.num_limit)
+        else:
+            undone = [k for k in keywords if not h.is_keyword_done(k)]
+            self.logger.info("[XHS:incr] resuming interrupted round, undone=%s", undone)
+
+        for k in keywords:
+            if h.is_keyword_done(k):
+                self.logger.info("[XHS:incr] keyword=%s done, wait for others", k)
+                continue
+            target = h.get_target(k)
+            collected = h.get_collected(k)
+            if collected >= target:
+                h.mark_keyword_done(k)
+                self.logger.info("[XHS:incr] keyword=%s already reached target=%d collected=%d, mark done",
+                                 k, target, collected)
+                continue
+            remaining = target - collected
+            self.logger.info("[XHS:incr] keyword=%s target=%d collected=%d remaining=%d",
+                             k, target, collected, remaining)
+            yield self._make_search_request(k, page=config.START_PAGE, remaining=remaining)
 
     def _make_search_request(self, keyword: str, page: int = 1, remaining: int = 0):
         api = "/api/sns/web/v1/search/notes"
@@ -192,10 +253,15 @@ class XiaohongshuSpider(SocialMediaSpider):
             return
 
         if not data.get("success"):
+            msg = str(data.get("msg") or "")
+            code = data.get("code")
             self.logger.error(
                 "[XHS] search API error page=%d msg=%s code=%s",
-                page, data.get("msg"), data.get("code"),
+                page, msg, code,
             )
+            if _is_auth_error(msg):
+                self.logger.warning("[XHS] login expired — closing spider, msg=%s", msg)
+                raise CloseSpider("Login expired")
             return
 
         items = data.get("data", {}).get("items", [])
@@ -261,10 +327,15 @@ class XiaohongshuSpider(SocialMediaSpider):
             return
 
         if not data.get("success"):
+            msg = str(data.get("msg") or "")
+            code = data.get("code")
             self.logger.error(
                 "[XHS] note detail API error note_id=%s msg=%s code=%s",
-                note_id, data.get("msg"), data.get("code"),
+                note_id, msg, code,
             )
+            if _is_auth_error(msg):
+                self.logger.warning("[XHS] login expired — closing spider, msg=%s", msg)
+                raise CloseSpider("Login expired")
             return
 
         items = data.get("data", {}).get("items", [])
@@ -288,9 +359,12 @@ class XiaohongshuSpider(SocialMediaSpider):
         note_info["url"] = note_url
         note_info["search_keyword"] = self._active_keyword(response)
 
+        kw = self._active_keyword(response)
+        target = self.helper.get_target(kw) or self.num_limit
+
         self.logger.info(
             "[XHS] note %d/%d | id=%s title=%s author=%s type=%s images=%d video=%s",
-            new_cnt, self.num_limit,
+            new_cnt, target,
             note_id,
             note_info.get("title", "")[:30],
             note_info.get("user", {}).get("nickname", ""),
@@ -306,8 +380,7 @@ class XiaohongshuSpider(SocialMediaSpider):
         if pub_ms and isinstance(pub_ms, (int, float)):
             published_at = datetime.fromtimestamp(pub_ms / 1000, tz=timezone.utc)
 
-        kw = self._active_keyword(response)
-        if new_cnt >= self.num_limit:
+        if new_cnt >= target:
             self.helper.mark_keyword_done(kw)
             self.logger.info("[XHS] kw=%s done, collected=%d", kw, new_cnt)
 
@@ -349,3 +422,10 @@ def _parse_count(value) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def _is_auth_error(msg: str) -> bool:
+    """Check if API error message indicates authentication failure."""
+    keywords = ["登录", "login", "auth", "认证", "expired", "过期", "失效", "未登录"]
+    msg_lower = msg.lower()
+    return any(kw in msg_lower for kw in keywords)
