@@ -21,6 +21,7 @@ _LOG_FILE = os.path.join(_LOG_DIR, "scrapy.log")
 
 class XiaohongshuSpider(SocialMediaSpider):
     name = "xiaohongshu"
+    allowed_domains = ["xiaohongshu.com"]
 
     custom_settings = {
         "LOG_FILE": _LOG_FILE,

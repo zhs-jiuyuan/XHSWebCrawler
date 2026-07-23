@@ -16,6 +16,7 @@ _LOG_FILE = os.path.join(_LOG_DIR, "scrapy.log")
 class AutohomeSpider(BaseSpider):
     name = "autohome"
     target_type = "automobile"
+    allowed_domains = ["autohome.com.cn"]
 
     custom_settings = {
         "LOG_FILE": _LOG_FILE,
